@@ -31,6 +31,11 @@ export const command = {
                 content: "Cannot play against a bot!",
             });
         }
+        if (opponent.id === interaction.user.id) {
+            return await interaction.editReply({
+                content: "Cannot play against yourself",
+            });
+        }
         const channel = (await interaction.client.channels.fetch(
             interaction.channelId
         )) as TextChannel;
@@ -51,8 +56,5 @@ export const command = {
         }
 
         await request(interaction.user.id, opponent.id, channel, interaction);
-        await interaction.editReply({
-            content: "Match request sent!",
-        });
     },
 };

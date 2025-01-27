@@ -25,41 +25,32 @@ export default async function request(
     }
     const player2 = await User.findOne({ userId: p2 });
     if (!player2) {
-        interaction.editReply(
+        await interaction.editReply(
             "Player not found in the database. Ask him to send the game request."
         );
         return;
     }
     if (player1.currentGame) {
-        interaction.editReply("You are already in a game.");
+        await interaction.editReply("You are already in a game.");
         return;
     }
     if (player2.currentGame) {
-        interaction.editReply("Player 2 is already in a game.");
+        await interaction.editReply("Player 2 is already in a game.");
         return;
     }
-    const req1 =
-        (await MatchRequest.findOne({
-            requestBy: player1.userId,
-        })) ||
-        (await MatchRequest.findOne({
-            requestTo: player1.userId,
-        }));
+    const req1 = await MatchRequest.findOne({
+        $or: [{ requestBy: player1.userId }, { requestTo: player1.userId }],
+    });
     if (req1) {
-        interaction.editReply("You have a pending request.");
+        await interaction.editReply("You have a pending request.");
         return;
     }
 
-    const req2 =
-        (await MatchRequest.findOne({
-            requestTo: player2.userId,
-        })) ||
-        (await MatchRequest.findOne({
-            requestBy: player2.userId,
-        }));
+    const req2 = await MatchRequest.findOne({
+        $or: [{ requestBy: player2.userId }, { requestTo: player2.userId }],
+    });
     if (req2) {
-        interaction.editReply("Player 2 has a pending request.");
-        return;
+        return await interaction.editReply("Player 2 has a pending request.");
     }
 
     await MatchRequest.create({
@@ -68,24 +59,49 @@ export default async function request(
         channel: interaction.channelId,
     });
 
-    const accept = new ButtonBuilder()
-        .setCustomId(`accept-${player2.userId}`)
+    const acceptBtn = new ButtonBuilder()
+        .setCustomId("accept")
         .setLabel("Accept")
         .setStyle(ButtonStyle.Success);
-    const decline = new ButtonBuilder()
-        .setCustomId(`decline-${player2.userId}`)
+    const declineBtn = new ButtonBuilder()
+        .setCustomId("decline")
         .setLabel("Decline")
         .setStyle(ButtonStyle.Danger);
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        accept,
-        decline
+        acceptBtn,
+        declineBtn
     );
 
-    await channel.send({
+    await interaction.editReply("Match request sent!");
+
+    const r = await channel.send({
         content: `<@${p2}>, you have a new match request from <@${p1}>`,
         components: [row],
     });
+
+    const collectorFilter = (i: any) => i.user.id === p2;
+    try {
+        const confirmation = await r.awaitMessageComponent({
+            filter: collectorFilter,
+            time: 60_000,
+        });
+        await confirmation.deferUpdate();
+
+        if (confirmation.customId === `accept`) {
+            await accept(p1, p2, channel.id, interaction.client);
+        } else if (confirmation.customId === `decline`) {
+            await decline(p1, p2, channel.id, interaction.client);
+        }
+    } catch (e) {
+        await channel.send("Match request timed out.");
+        await MatchRequest.deleteOne({
+            requestBy: p1,
+            requestTo: p2,
+            channel: channel.id,
+        });
+    }
+    await r.delete();
 }
 
 export async function accept(
@@ -100,7 +116,7 @@ export async function accept(
     const channel = (await client.channels.fetch(channelId)) as TextChannel;
 
     if (!player1 || !player2) {
-        channel.send("Players not found.");
+        await channel.send("Players not found.");
         return;
     }
 
@@ -148,12 +164,12 @@ export async function play(p1: string, p2: string, channel: TextChannel) {
     const player1 = await User.findOne({ userId: p1 });
     const player2 = await User.findOne({ userId: p2 });
     if (!player1 || !player2) {
-        channel.send("Players not found.");
+        await channel.send("Players not found.");
         return;
     }
 
     if (!player1.currentGame.equals(player2.currentGame)) {
-        channel.send("Players are not in same game.");
+        await channel.send("Players are not in same game.");
         return;
     }
 
@@ -166,7 +182,7 @@ export async function play(p1: string, p2: string, channel: TextChannel) {
     const image = await drawBoard(chess.board());
 
     if (!game) {
-        channel.send("Game not found.");
+        await channel.send("Game not found.");
         return;
     }
 
@@ -185,22 +201,26 @@ export async function play(p1: string, p2: string, channel: TextChannel) {
     await game.save();
 }
 
-export async function drawGame(player: string, channel: TextChannel) {
+export async function drawGame(
+    player: string,
+    channel: TextChannel,
+    interaction: ChatInputCommandInteraction
+) {
     const game = await Game.findOne({
         $or: [{ player1: player }, { player2: player }],
         status: "active",
     });
     if (!game) {
-        channel.send("Game not found.");
+        await channel.send("Game not found.");
         return;
     }
     const opponent = game.player1 === player ? game.player2 : game.player1;
     const accept = new ButtonBuilder()
-        .setCustomId(`drawAccept-${opponent}`)
+        .setCustomId("acceptDraw")
         .setLabel("Accept")
         .setStyle(ButtonStyle.Success);
     const decline = new ButtonBuilder()
-        .setCustomId(`drawDecline-${opponent}`)
+        .setCustomId("declineDraw")
         .setLabel("Decline")
         .setStyle(ButtonStyle.Danger);
 
@@ -218,30 +238,60 @@ export async function drawGame(player: string, channel: TextChannel) {
         }
     );
 
-    await channel.send({
+    const r = await channel.send({
         content: `<@${opponent}>, <@${player}> has requested a draw.`,
         components: [row],
     });
+
+    await interaction.editReply("Draw request sent.");
+
+    const collectorFilter = (i: any) => i.user.id === opponent;
+    try {
+        const confirmation = await r.awaitMessageComponent({
+            filter: collectorFilter,
+            time: 60_000,
+        });
+        await confirmation.deferUpdate();
+
+        if (confirmation.customId === `acceptDraw`) {
+            await Game.updateOne(
+                {
+                    _id: game.id,
+                },
+                {
+                    status: "draw",
+                }
+            );
+            await channel.send("Game ended in a draw.");
+        } else if (confirmation.customId === `declineDraw`) {
+            await channel.send("Draw request declined.");
+        }
+    } catch (e) {
+        await channel.send("Draw request timed out.");
+    }
+    await r.delete();
 }
 
 export async function legalMoves(
     player: string,
-    channel: TextChannel,
     interaction: ChatInputCommandInteraction
 ) {
     const game = await Game.findOne({
         $or: [{ player1: player }, { player2: player }],
         status: "active",
     });
+    const channel = (await interaction.client.channels.fetch(
+        interaction.channelId
+    )) as TextChannel;
     const color = game?.player1 === player ? "w" : "b";
     if (!game || !game.fen) {
-        channel.send("Game not found.");
+        await channel.send("Game not found.");
         return;
     }
-
     const chess = new Chess(game.fen);
+
     if (chess.turn() !== color) {
-        interaction.editReply("It's not your turn.");
+        await interaction.editReply("It's not your turn.");
         return;
     }
     const moves = chess.moves({
@@ -256,7 +306,7 @@ export async function move(
     move: {
         from: string;
         to: string;
-        promotion: string;
+        promotion?: string;
     },
     interaction: ChatInputCommandInteraction
 ) {
@@ -281,7 +331,7 @@ export async function move(
     const chess = new Chess(game.fen);
 
     if (chess.turn() !== color) {
-        channel.send("It's not your turn.");
+        await channel.send("It's not your turn.");
         return;
     }
 
@@ -290,6 +340,7 @@ export async function move(
     const image = await drawBoard(chess.board());
 
     game.fen = chess.fen();
+    await game.save();
 
     const attachment = new AttachmentBuilder(image, {
         name: "board.png",
@@ -302,6 +353,30 @@ export async function move(
         });
     }
     await channel.send({
+        files: [attachment],
+    });
+}
+
+export async function showGame(
+    player: string,
+    interaction: ChatInputCommandInteraction
+) {
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    if (!game || !game.fen) {
+        await interaction.editReply("Game not found.");
+        return;
+    }
+    const chess = new Chess(game.fen);
+    const image = await drawBoard(chess.board());
+
+    const attachment = new AttachmentBuilder(image, {
+        name: "board.png",
+    });
+
+    await interaction.editReply({
         files: [attachment],
     });
 }

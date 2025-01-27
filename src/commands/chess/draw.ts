@@ -34,9 +34,6 @@ export const command = {
                 content: "Cannot send messages in this channel!",
             });
         }
-        await drawGame(interaction.user.id, channel);
-        await interaction.editReply({
-            content: "Draw request sent!",
-        });
+        await drawGame(interaction.user.id, channel, interaction);
     },
 };
