@@ -10,11 +10,6 @@ const gameSchema = new Schema(
             type: String,
             required: true,
         },
-        moves: [
-            {
-                type: String,
-            },
-        ],
         status: {
             type: String,
             required: true,

@@ -1,10 +1,14 @@
 import {
     ActionRowBuilder,
+    APIApplicationCommandPermissionsConstant,
+    ApplicationCommandNumericOptionMinMaxValueMixin,
     AttachmentBuilder,
     ButtonBuilder,
     ButtonStyle,
     ChatInputCommandInteraction,
     Client,
+    GuildNavigationMentions,
+    isJSONEncodable,
     TextChannel,
 } from "discord.js";
 import { User } from "../schemas/User";
@@ -379,4 +383,162 @@ export async function showGame(
     await interaction.editReply({
         files: [attachment],
     });
+}
+
+export async function resign(
+    player: string,
+    interaction: ChatInputCommandInteraction
+) {
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    if (!game) {
+        await interaction.editReply("Game not found.");
+        return;
+    }
+    if (!game.channel) {
+        await interaction.editReply("Channel not found.");
+        return;
+    }
+
+    const channel = (await interaction.client.channels.fetch(
+        game.channel
+    )) as TextChannel;
+
+    if (!channel || !channel.isTextBased()) {
+        await interaction.editReply("Channel not found.");
+        return;
+    }
+
+    const opponent = game.player1 === player ? game.player2 : game.player1;
+
+    await Game.updateOne(
+        {
+            _id: game.id,
+        },
+        {
+            status: "resign",
+            winner: opponent,
+        }
+    );
+
+    await User.updateMany(
+        {
+            currentGame: game.id,
+        },
+        {
+            currentGame: null,
+        }
+    );
+
+    await calculateElo(opponent, player, interaction);
+    await channel.send(`<@${player}> has resigned.`);
+    await interaction.editReply("You have resigned.");
+}
+
+export async function calculateElo(
+    winner: string,
+    loser: string,
+    interaction: ChatInputCommandInteraction
+) {
+    const winnerUser = await User.findOne({ userId: winner });
+    const loserUser = await User.findOne({ userId: loser });
+
+    if (!winnerUser || !loserUser) {
+        await interaction.editReply("Players not found.");
+        return;
+    }
+
+    const k = 32;
+
+    const winnerExpected =
+        1 / (1 + 10 ** ((loserUser.rating - winnerUser.rating) / 400));
+    const loserExpected =
+        1 / (1 + 10 ** ((winnerUser.rating - loserUser.rating) / 400));
+
+    const winnerNewRating = winnerUser.rating + k * (1 - winnerExpected);
+    const loserNewRating = loserUser.rating + k * (0 - loserExpected);
+
+    winnerUser.rating = winnerNewRating;
+    loserUser.rating = loserNewRating;
+
+    await winnerUser.save();
+    await loserUser.save();
+}
+
+export async function checkState(player: string) {
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    if (!game || !game.fen) {
+        return;
+    }
+    const chess = new Chess(game.fen);
+    if (chess.isCheckmate()) {
+        return "checkmate";
+    } else if (chess.isDraw()) {
+        return "draw";
+    } else if (chess.isStalemate()) {
+        return "stalemate";
+    } else if (chess.isThreefoldRepetition()) {
+        return "threefoldRepetition";
+    } else if (chess.isInsufficientMaterial()) {
+        return "insufficientMaterial";
+    }
+    return;
+}
+
+export async function checkGame(player: string) {
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    if (!game) {
+        return;
+    }
+    return game;
+}
+
+export async function getHistory(player: string) {
+    const games = await Game.find({
+        $or: [{ player1: player }, { player2: player }],
+        status: { $ne: "active" },
+    });
+    return games;
+}
+
+export async function getLeaderboard() {
+    const users = await User.find();
+    users.sort((a, b) => b.rating - a.rating);
+    return users;
+}
+
+export async function getPlayer(player: string) {
+    const user = await User.findOne({ userId: player });
+    const games = await Game.find({
+        $or: [{ player1: player }, { player2: player }],
+    });
+    const wins = games.filter(
+        (game) => game.status !== "active" && game.winner === player
+    ).length;
+    const losses = games.filter((game) => {
+        return (
+            game.status !== "active" && game.winner && game.winner !== player
+        );
+    }).length;
+    const draws = games.filter(
+        (game) => game.status !== "active" && !game.winner
+    ).length;
+
+    const result = Object.assign(
+        {
+            wins,
+            losses,
+            draws,
+        },
+        user?.toJSON()
+    );
+    return result;
 }

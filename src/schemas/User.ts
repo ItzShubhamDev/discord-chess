@@ -15,8 +15,12 @@ const userSchema = new Schema(
             type: Number,
             default: 0,
         },
+        rating: {
+            type: Number,
+            default: 1200,
+        },
         currentGame: {
-            type: Schema.Types.ObjectId, 
+            type: Schema.Types.ObjectId,
             ref: "Game",
             default: null,
         },
