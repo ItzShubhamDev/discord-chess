@@ -7,13 +7,13 @@ const userSchema = new Schema(
             required: true,
             unique: true,
         },
-        gamesPlayed: {
-            type: Number,
-            default: 0,
+        name: {
+            type: String,
+            default: null,
         },
-        gamesWon: {
-            type: Number,
-            default: 0,
+        avatar: {
+            type: String,
+            default: null,
         },
         rating: {
             type: Number,

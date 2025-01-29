@@ -2,6 +2,7 @@ import { Color, PieceSymbol, Square } from "chess.js";
 import Canvas from "@napi-rs/canvas";
 import fs from "fs";
 import path from "path";
+import { networkInterfaces } from "os";
 
 export async function drawBoard(
     board: ({

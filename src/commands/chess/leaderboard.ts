@@ -24,12 +24,17 @@ export const command = {
         const players: string[] = [];
         const ranking: string[] = [];
         for (const user of leaderboard) {
-            const u = await interaction.client.users.fetch(user.userId);
-            if (!u) {
-                continue;
+            try {
+                const u = await interaction.client.users.fetch(user.userId);
+                if (!u) {
+                    continue;
+                }
+                players.push(u.username);
+                ranking.push(user.rating.toString());
+            } catch (e) {
+                players.push(user.userId + " (AI)");
+                ranking.push(user.rating.toString());
             }
-            players.push(u.username);
-            ranking.push(user.rating.toString());
         }
         embed.addFields(
             {
@@ -38,7 +43,7 @@ export const command = {
                 inline: true,
             },
             {
-                name: "Ranking",
+                name: "Rating",
                 value: ranking.join("\n"),
                 inline: true,
             }

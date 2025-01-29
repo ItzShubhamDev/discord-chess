@@ -7,6 +7,7 @@ import {
     time,
 } from "discord.js";
 import { getHistory } from "../../functions/game";
+import { checkAI } from "../../functions/ai";
 
 export const command = {
     data: new SlashCommandBuilder()
@@ -48,7 +49,15 @@ export const command = {
         embed.addFields(
             {
                 name: "Opponent",
-                value: opponents.map((opponent) => `<@${opponent}>`).join("\n"),
+                value: opponents
+                    .map((opponent) => {
+                        const ai = checkAI(opponent);
+                        if (ai) {
+                            return opponent + " (AI)";
+                        }
+                        return `<@${opponent}>`;
+                    })
+                    .join("\n"),
                 inline: true,
             },
             {

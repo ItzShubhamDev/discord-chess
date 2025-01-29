@@ -1,178 +1,69 @@
 import {
     ActionRowBuilder,
-    APIApplicationCommandPermissionsConstant,
-    ApplicationCommandNumericOptionMinMaxValueMixin,
     AttachmentBuilder,
     ButtonBuilder,
+    ButtonInteraction,
     ButtonStyle,
     ChatInputCommandInteraction,
-    Client,
-    GuildNavigationMentions,
-    isJSONEncodable,
+    MessageFlags,
     TextChannel,
 } from "discord.js";
 import { User } from "../schemas/User";
 import { Game } from "../schemas/Game";
-import { MatchRequest } from "../schemas/MatchRequest";
-import { Chess } from "chess.js";
+import { Chess, Move, PieceSymbol } from "chess.js";
 import { drawBoard } from "./board";
+import { aiMove, checkAI } from "./ai";
 
-export default async function request(
-    p1: string,
-    p2: string,
-    channel: TextChannel,
-    interaction: ChatInputCommandInteraction
-) {
-    let player1 = await User.findOne({ userId: p1 });
-    if (!player1) {
-        player1 = await User.create({ userId: p1, username: p1 });
-    }
-    const player2 = await User.findOne({ userId: p2 });
-    if (!player2) {
-        await interaction.editReply(
-            "Player not found in the database. Ask him to send the game request."
-        );
-        return;
-    }
-    if (player1.currentGame) {
-        await interaction.editReply("You are already in a game.");
-        return;
-    }
-    if (player2.currentGame) {
-        await interaction.editReply("Player 2 is already in a game.");
-        return;
-    }
-    const req1 = await MatchRequest.findOne({
-        $or: [{ requestBy: player1.userId }, { requestTo: player1.userId }],
-    });
-    if (req1) {
-        await interaction.editReply("You have a pending request.");
-        return;
-    }
+const labels = {
+    bb: "Bishop",
+    bk: "King",
+    bn: "Knight",
+    bp: "Pawn",
+    bq: "Queen",
+    br: "Rook",
+    wb: "Bishop",
+    wk: "King",
+    wn: "Knight",
+    wp: "Pawn",
+    wq: "Queen",
+    wr: "Rook",
+} as Record<string, string>;
 
-    const req2 = await MatchRequest.findOne({
-        $or: [{ requestBy: player2.userId }, { requestTo: player2.userId }],
-    });
-    if (req2) {
-        return await interaction.editReply("Player 2 has a pending request.");
-    }
-
-    await MatchRequest.create({
-        requestBy: player1.userId,
-        requestTo: player2.userId,
-        channel: interaction.channelId,
-    });
-
-    const acceptBtn = new ButtonBuilder()
-        .setCustomId("accept")
-        .setLabel("Accept")
-        .setStyle(ButtonStyle.Success);
-    const declineBtn = new ButtonBuilder()
-        .setCustomId("decline")
-        .setLabel("Decline")
-        .setStyle(ButtonStyle.Danger);
-
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        acceptBtn,
-        declineBtn
-    );
-
-    await interaction.editReply("Match request sent!");
-
-    const r = await channel.send({
-        content: `<@${p2}>, you have a new match request from <@${p1}>`,
-        components: [row],
-    });
-
-    const collectorFilter = (i: any) => i.user.id === p2;
-    try {
-        const confirmation = await r.awaitMessageComponent({
-            filter: collectorFilter,
-            time: 60_000,
-        });
-        await confirmation.deferUpdate();
-
-        if (confirmation.customId === `accept`) {
-            await accept(p1, p2, channel.id, interaction.client);
-        } else if (confirmation.customId === `decline`) {
-            await decline(p1, p2, channel.id, interaction.client);
-        }
-    } catch (e) {
-        await channel.send("Match request timed out.");
-        await MatchRequest.deleteOne({
-            requestBy: p1,
-            requestTo: p2,
-            channel: channel.id,
-        });
-    }
-    await r.delete();
-}
-
-export async function accept(
-    p1: string,
-    p2: string,
-    channelId: string,
-    client: Client
-) {
-    const player1 = await User.findOne({ userId: p1 });
-    const player2 = await User.findOne({ userId: p2 });
-
-    const channel = (await client.channels.fetch(channelId)) as TextChannel;
-
-    if (!player1 || !player2) {
-        await channel.send("Players not found.");
-        return;
-    }
-
-    await MatchRequest.deleteOne({
-        requestBy: p1,
-        requestTo: p2,
-        channel: channel.id,
-    });
-
-    await channel.send("Match request accepted!");
-
-    const game = await Game.create({
-        player1: p1,
-        player2: p2,
-        status: "active",
-    });
-
-    player1.currentGame = game.id;
-    player2.currentGame = game.id;
-
-    await player1?.save();
-    await player2?.save();
-
-    await play(p1, p2, channel);
-}
-
-export async function decline(
-    p1: string,
-    p2: string,
-    channelId: string,
-    client: Client
-) {
-    const channel = (await client.channels.fetch(channelId)) as TextChannel;
-
-    await MatchRequest.deleteOne({
-        requestBy: p1,
-        requestTo: p2,
-        channel: channel.id,
-    });
-
-    await channel.send("Match request declined!");
-}
+const emojis = {
+    bb: "<:blackbishop:1333283975866875977>",
+    bk: "<:blackking:1333283997014294620>",
+    bn: "<:blackknight:1333285740372557949>",
+    bp: "<:blackpawn:1333285750724104212>",
+    bq: "<:blackqueen:1333285759628869662>",
+    br: "<:blackrook:1333285793405468672>",
+    wb: "<:whitebishop:1333285803601694811>",
+    wk: "<:whiteking:1333285817648418907>",
+    wn: "<:whiteknight:1333285910837461133>",
+    wp: "<:whitepawn:1333285922556608592>",
+    wq: "<:whitequeen:1333285935760277565>",
+    wr: "<:whiterook:1333285946602291274>",
+} as Record<string, string>;
 
 export async function play(p1: string, p2: string, channel: TextChannel) {
+    const isAi = checkAI(p2);
     const player1 = await User.findOne({ userId: p1 });
-    const player2 = await User.findOne({ userId: p2 });
+    let player2 = await User.findOne({ userId: p2 });
+    if (isAi) {
+        player2 = await User.create({
+            userId: p2,
+        });
+        await Game.create({
+            player1: p1,
+            player2: p2,
+            status: "active",
+        });
+    }
     if (!player1 || !player2) {
         await channel.send("Players not found.");
         return;
     }
 
-    if (!player1.currentGame.equals(player2.currentGame)) {
+    if (!player1.currentGame.equals(player2.currentGame) && !isAi) {
         await channel.send("Players are not in same game.");
         return;
     }
@@ -182,15 +73,22 @@ export async function play(p1: string, p2: string, channel: TextChannel) {
         status: "active",
     });
 
-    const chess = new Chess();
-    const image = await drawBoard(chess.board());
-
     if (!game) {
         await channel.send("Game not found.");
         return;
     }
 
+    const chess = new Chess();
+    const image = await drawBoard(chess.board());
+
     game.fen = chess.fen();
+
+    const button = new ButtonBuilder()
+        .setCustomId("moves")
+        .setLabel("Moves")
+        .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
 
     const attachment = new AttachmentBuilder(image, {
         name: "board.png",
@@ -198,11 +96,340 @@ export async function play(p1: string, p2: string, channel: TextChannel) {
 
     const message = await channel.send({
         files: [attachment],
+        components: [row],
     });
     game.message = message.id;
     game.channel = channel.id;
 
     await game.save();
+}
+
+export async function legalMoves(
+    player: string,
+    interaction: ChatInputCommandInteraction | ButtonInteraction
+) {
+    const res = await interaction.deferReply({
+        flags: MessageFlags.Ephemeral,
+        withResponse: true,
+    });
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    const channel = (await interaction.client.channels.fetch(
+        interaction.channelId
+    )) as TextChannel;
+    if (!game || !game.fen) {
+        await channel.send("Game not found.");
+        return;
+    }
+    const color = game.player1 === player ? "w" : "b";
+    const isAi = checkAI(game.player2);
+
+    const chess = new Chess(game.fen);
+
+    const status = await checkState(chess);
+    if (status) {
+        await Game.updateOne(
+            {
+                _id: game.id,
+            },
+            {
+                status,
+                winner:
+                    status === "checkmate"
+                        ? color === "w"
+                            ? game.player2
+                            : game.player1
+                        : null,
+            }
+        );
+        await User.updateMany(
+            {
+                currentGame: game.id,
+            },
+            {
+                currentGame: null,
+            }
+        );
+        let text = `Game ended in ${status}.`;
+        if (status === "checkmate") {
+            const winner = color === "w" ? game.player2 : game.player1;
+            await calculateElo(winner, player, interaction);
+            text = `<@${winner}> has won.`;
+        }
+        await interaction.editReply("Game ended.");
+        const image = await drawBoard(chess.board());
+        await sendChessBoard(image, channel, game.message, text);
+        await game.save();
+        return;
+    }
+
+    if (chess.turn() !== color) {
+        await interaction.editReply("It's not your turn.");
+        return;
+    }
+    const moves = chess.moves({
+        verbose: true,
+    });
+
+    if (moves.length === 0) {
+        await interaction.editReply("No legal moves.");
+        return;
+    }
+
+    const groupedMoves: Record<string, Move[]> = {};
+
+    for (const mv of moves) {
+        if (!groupedMoves[mv.color + mv.piece]) {
+            groupedMoves[mv.color + mv.piece] = [];
+        }
+        groupedMoves[mv.color + mv.piece].push(mv);
+    }
+
+    const pieces = Object.keys(groupedMoves).map((piece) => {
+        return new ButtonBuilder()
+            .setCustomId(piece)
+            .setLabel(labels[piece])
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji(emojis[piece]);
+    });
+
+    let piecesRows = [] as ActionRowBuilder<ButtonBuilder>[];
+    for (let i = 0; i < pieces.length; i += 5) {
+        piecesRows.push(
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+                pieces.slice(i, i + 5)
+            )
+        );
+    }
+
+    await interaction.editReply({
+        content: "Select a piece to move.",
+        components: piecesRows,
+    });
+
+    const collectorFilter = (i: any) => i.user.id === player;
+
+    try {
+        const r = await res.resource?.message?.awaitMessageComponent({
+            filter: collectorFilter,
+            time: 60_000,
+        });
+        await r?.deferUpdate();
+
+        if (!r) return;
+        const customId = r.customId as PieceSymbol;
+        const selectedPiece = groupedMoves[customId];
+
+        if (!selectedPiece) {
+            return await interaction.editReply({
+                content: "No moves found for this piece.",
+                components: [],
+            });
+        }
+
+        let buttons: ButtonBuilder[] = [];
+
+        for (const move of selectedPiece) {
+            buttons.push(
+                new ButtonBuilder()
+                    .setCustomId(`${move.from}-${move.to}`)
+                    .setLabel(`${move.from} -> ${move.to}`)
+                    .setEmoji(emojis[move.color + move.piece])
+                    .setStyle(ButtonStyle.Primary)
+                    .setDisabled(false)
+            );
+        }
+
+        const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+
+        for (let i = 0; i < buttons.length; i += 5) {
+            rows.push(
+                new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    buttons.slice(i, i + 5)
+                )
+            );
+        }
+
+        await interaction.editReply({
+            components: rows,
+        });
+
+        try {
+            const mv = (await res.resource?.message?.awaitMessageComponent({
+                filter: collectorFilter,
+                time: 60_000,
+            })) as ButtonInteraction;
+
+            if (!mv) return;
+
+            const selectedMove = selectedPiece.find(
+                (m) => `${m.from}-${m.to}` === mv.customId
+            );
+
+            if (!selectedMove) {
+                await interaction.editReply("No moves selected.");
+                return;
+            }
+
+            await move(player, selectedMove, interaction);
+            if (isAi) {
+                await aiMove(game._id.toString(), interaction);
+            } else {
+                const opponent =
+                    game.player1 === player ? game.player2 : game.player1;
+                const msg = await channel.send(
+                    `<@${player}> moved \`${selectedMove.from} -> ${selectedMove.to}\` <@${opponent}> your turn.`
+                );
+
+                setTimeout(() => {
+                    msg.delete();
+                }, 2000);
+
+                await interaction.deleteReply();
+            }
+        } catch (e) {
+            await interaction.editReply("No moves selected.");
+        }
+    } catch (e) {
+        await interaction.editReply("No moves selected.");
+    }
+}
+
+export async function move(
+    player: string,
+    move: {
+        from: string;
+        to: string;
+        promotion?: string;
+    },
+    interaction: ChatInputCommandInteraction | ButtonInteraction
+) {
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    const color = game?.player1 === player ? "w" : "b";
+    if (!game || !game.fen || !game.channel) {
+        interaction.editReply("Game not found.");
+        return;
+    }
+    const channel = (await interaction.client.channels.fetch(
+        game.channel
+    )) as TextChannel;
+
+    if (!channel || !channel.isTextBased()) {
+        interaction.editReply("Channel not found.");
+        return;
+    }
+
+    const chess = new Chess(game.fen);
+
+    const status = await checkState(chess);
+    if (status) {
+        await Game.updateOne(
+            {
+                _id: game.id,
+            },
+            {
+                status,
+                winner:
+                    status === "checkmate"
+                        ? color === "w"
+                            ? game.player2
+                            : game.player1
+                        : null,
+            }
+        );
+        await User.updateMany(
+            {
+                currentGame: game.id,
+            },
+            {
+                currentGame: null,
+            }
+        );
+        let text = `Game ended in ${status}.`;
+        if (status === "checkmate") {
+            const winner = color === "w" ? game.player2 : game.player1;
+            await calculateElo(winner, player, interaction);
+            text = `<@${winner}> has won.`;
+        }
+        await interaction.editReply("Game ended.");
+        const image = await drawBoard(chess.board());
+        await sendChessBoard(image, channel, game.message, text);
+        await game.save();
+        return;
+    }
+
+    if (chess.turn() !== color) {
+        await interaction.editReply("It's not your turn.");
+        return;
+    }
+
+    chess.move(move);
+    const image = await drawBoard(chess.board());
+
+    await sendChessBoard(image, channel, game.message);
+
+    game.fen = chess.fen();
+    await game.save();
+}
+
+export async function sendChessBoard(
+    image: Buffer<ArrayBufferLike>,
+    channel: TextChannel,
+    messageId?: string | null,
+    content?: string
+) {
+    const attachment = new AttachmentBuilder(image, {
+        name: "board.png",
+    });
+
+    const button = new ButtonBuilder()
+        .setCustomId("moves")
+        .setLabel("Moves")
+        .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
+
+    const message = await channel.messages.fetch(messageId || "");
+    if (message) {
+        return await message.edit({
+            content,
+            files: [attachment],
+            components: [row],
+        });
+    }
+    await channel.send({
+        content,
+        files: [attachment],
+    });
+}
+
+export async function showGame(
+    player: string,
+    interaction: ChatInputCommandInteraction
+) {
+    const game = await Game.findOne({
+        $or: [{ player1: player }, { player2: player }],
+        status: "active",
+    });
+    if (!game || !game.fen) {
+        await interaction.editReply("Game not found.");
+        return;
+    }
+    const chess = new Chess(game.fen);
+    const image = await drawBoard(chess.board());
+
+    const attachment = new AttachmentBuilder(image, {
+        name: "board.png",
+    });
+
+    await interaction.editReply({
+        files: [attachment],
+    });
 }
 
 export async function drawGame(
@@ -219,6 +446,30 @@ export async function drawGame(
         return;
     }
     const opponent = game.player1 === player ? game.player2 : game.player1;
+    const isAi = checkAI(opponent);
+
+    if (isAi) {
+        await Game.updateOne(
+            {
+                _id: game.id,
+            },
+            {
+                status: "draw",
+            }
+        );
+        await User.updateMany(
+            {
+                currentGame: game.id,
+            },
+            {
+                currentGame: null,
+            }
+        );
+        await channel.send("Game ended in a draw.");
+        await interaction.editReply("Game ended in a draw.");
+        return;
+    }
+
     const accept = new ButtonBuilder()
         .setCustomId("acceptDraw")
         .setLabel("Accept")
@@ -231,15 +482,6 @@ export async function drawGame(
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         accept,
         decline
-    );
-
-    await User.updateMany(
-        {
-            currentGame: game.id,
-        },
-        {
-            currentGame: null,
-        }
     );
 
     const r = await channel.send({
@@ -270,119 +512,19 @@ export async function drawGame(
         } else if (confirmation.customId === `declineDraw`) {
             await channel.send("Draw request declined.");
         }
+
+        await User.updateMany(
+            {
+                currentGame: game.id,
+            },
+            {
+                currentGame: null,
+            }
+        );
     } catch (e) {
         await channel.send("Draw request timed out.");
     }
     await r.delete();
-}
-
-export async function legalMoves(
-    player: string,
-    interaction: ChatInputCommandInteraction
-) {
-    const game = await Game.findOne({
-        $or: [{ player1: player }, { player2: player }],
-        status: "active",
-    });
-    const channel = (await interaction.client.channels.fetch(
-        interaction.channelId
-    )) as TextChannel;
-    const color = game?.player1 === player ? "w" : "b";
-    if (!game || !game.fen) {
-        await channel.send("Game not found.");
-        return;
-    }
-    const chess = new Chess(game.fen);
-
-    if (chess.turn() !== color) {
-        await interaction.editReply("It's not your turn.");
-        return;
-    }
-    const moves = chess.moves({
-        verbose: true,
-    });
-
-    return moves;
-}
-
-export async function move(
-    player: string,
-    move: {
-        from: string;
-        to: string;
-        promotion?: string;
-    },
-    interaction: ChatInputCommandInteraction
-) {
-    const game = await Game.findOne({
-        $or: [{ player1: player }, { player2: player }],
-        status: "active",
-    });
-    const color = game?.player1 === player ? "w" : "b";
-    if (!game || !game.fen || !game.channel) {
-        interaction.editReply("Game not found.");
-        return;
-    }
-    const channel = (await interaction.client.channels.fetch(
-        game.channel
-    )) as TextChannel;
-
-    if (!channel || !channel.isTextBased()) {
-        interaction.editReply("Channel not found.");
-        return;
-    }
-
-    const chess = new Chess(game.fen);
-
-    if (chess.turn() !== color) {
-        await channel.send("It's not your turn.");
-        return;
-    }
-
-    chess.move(move);
-
-    const image = await drawBoard(chess.board());
-
-    game.fen = chess.fen();
-    await game.save();
-
-    const attachment = new AttachmentBuilder(image, {
-        name: "board.png",
-    });
-
-    const message = await channel.messages.fetch(game.message || "");
-    if (message) {
-        return await message.edit({
-            files: [attachment],
-        });
-    }
-    await channel.send({
-        files: [attachment],
-    });
-}
-
-export async function showGame(
-    player: string,
-    interaction: ChatInputCommandInteraction
-) {
-    const game = await Game.findOne({
-        $or: [{ player1: player }, { player2: player }],
-        status: "active",
-    });
-    if (!game || !game.fen) {
-        await interaction.editReply("Game not found.");
-        return;
-    }
-    const chess = new Chess(game.fen);
-    const image = await drawBoard(chess.board());
-
-    const attachment = new AttachmentBuilder(image, {
-        name: "board.png",
-    });
-
-    await interaction.editReply({
-        files: [attachment],
-    });
 }
 
 export async function resign(
@@ -440,7 +582,7 @@ export async function resign(
 export async function calculateElo(
     winner: string,
     loser: string,
-    interaction: ChatInputCommandInteraction
+    interaction: ChatInputCommandInteraction | ButtonInteraction
 ) {
     const winnerUser = await User.findOne({ userId: winner });
     const loserUser = await User.findOne({ userId: loser });
@@ -460,22 +602,14 @@ export async function calculateElo(
     const winnerNewRating = winnerUser.rating + k * (1 - winnerExpected);
     const loserNewRating = loserUser.rating + k * (0 - loserExpected);
 
-    winnerUser.rating = winnerNewRating;
-    loserUser.rating = loserNewRating;
+    winnerUser.rating = parseFloat(winnerNewRating.toFixed(2));
+    loserUser.rating = parseFloat(loserNewRating.toFixed(2));
 
     await winnerUser.save();
     await loserUser.save();
 }
 
-export async function checkState(player: string) {
-    const game = await Game.findOne({
-        $or: [{ player1: player }, { player2: player }],
-        status: "active",
-    });
-    if (!game || !game.fen) {
-        return;
-    }
-    const chess = new Chess(game.fen);
+export async function checkState(chess: Chess) {
     if (chess.isCheckmate()) {
         return "checkmate";
     } else if (chess.isDraw()) {
