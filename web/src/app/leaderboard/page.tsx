@@ -1,8 +1,6 @@
-async function getLeaderboard() {
-    const response = await fetch("http://localhost:3000/api/leaderboard");
-    const { leaderboard } = await response.json();
-    return leaderboard;
-}
+"use client";
+
+import { useEffect, useState } from "react";
 
 type leaderboardUser = {
     userId: string;
@@ -11,8 +9,17 @@ type leaderboardUser = {
     rating: number;
 };
 
-export default async function Page() {
-    const leaderboard = await getLeaderboard();
+export default function Page() {
+    const [leaderboard, setLeaderboard] = useState<leaderboardUser[]>([]);
+
+    useEffect(() => {
+        const getLeaderboard = async () => {
+            const res = await fetch("/api/leaderboard");
+            const { leaderboard } = await res.json();
+            setLeaderboard(leaderboard);
+        };
+        getLeaderboard();
+    }, []);
     return (
         <div className="p-4 w-full flex flex-col items-center justify-center">
             <h1 className="text-gray-200 font-bold text-2xl w-full text-center">
