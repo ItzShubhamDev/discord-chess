@@ -63,9 +63,8 @@ export async function aiMove(
     }
 
     const board = chess.board();
-    const image = await drawBoard(board);
 
-    await sendChessBoard(image, channel, game.message, "AI Made Move!");
+    await sendChessBoard(board, channel, game.message, "AI Made Move!");
 
     game.fen = chess.fen();
     await game.save();
