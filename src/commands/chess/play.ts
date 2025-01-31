@@ -1,5 +1,6 @@
 import {
     ChatInputCommandInteraction,
+    InteractionContextType,
     MessageFlags,
     SlashCommandBuilder,
     TextChannel,
@@ -41,7 +42,8 @@ export const command = {
                         .setDescription("The user you want to play against")
                         .setRequired(true);
                 });
-        }),
+        })
+        .setContexts(InteractionContextType.Guild),
     async execute(interaction: ChatInputCommandInteraction) {
         const subcommand = interaction.options.getSubcommand();
         const channel = await getChannel(interaction);

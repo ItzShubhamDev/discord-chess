@@ -2,6 +2,7 @@ import {
     ChatInputCommandInteraction,
     Colors,
     EmbedBuilder,
+    InteractionContextType,
     MessageFlags,
     SlashCommandBuilder,
 } from "discord.js";
@@ -16,7 +17,8 @@ export const command = {
                 .setName("player")
                 .setDescription("The player to get information for")
                 .setRequired(true)
-        ),
+        )
+        .setContexts(InteractionContextType.Guild),
 
     async execute(interaction: ChatInputCommandInteraction) {
         await interaction.deferReply({

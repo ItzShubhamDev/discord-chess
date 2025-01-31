@@ -2,6 +2,7 @@ import {
     ChatInputCommandInteraction,
     Colors,
     EmbedBuilder,
+    InteractionContextType,
     SlashCommandBuilder,
 } from "discord.js";
 import { getLeaderboard } from "../../functions/game";
@@ -9,8 +10,8 @@ import { getLeaderboard } from "../../functions/game";
 export const command = {
     data: new SlashCommandBuilder()
         .setName("leaderboard")
-
-        .setDescription("Shows the leaderboard of chess players"),
+        .setDescription("Shows the leaderboard of chess players")
+        .setContexts(InteractionContextType.Guild),
 
     async execute(interaction: ChatInputCommandInteraction) {
         const leaderboard = await getLeaderboard();

@@ -2,6 +2,7 @@ import {
     ChatInputCommandInteraction,
     Colors,
     EmbedBuilder,
+    InteractionContextType,
     SlashCommandBuilder,
     time,
 } from "discord.js";
@@ -11,7 +12,8 @@ import { checkAI } from "../../functions/ai";
 export const command = {
     data: new SlashCommandBuilder()
         .setName("history")
-        .setDescription("Shows your history of chess games"),
+        .setDescription("Shows your history of chess games")
+        .setContexts(InteractionContextType.Guild),
 
     async execute(interaction: ChatInputCommandInteraction) {
         const history = await getHistory(interaction.user.id);
