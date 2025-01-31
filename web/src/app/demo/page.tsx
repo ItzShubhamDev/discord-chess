@@ -7,7 +7,7 @@ export default function Page() {
                 </h2>
                 <video
                     className="rounded-lg aspect-video w-full"
-                    src=".."
+                    src="https://cloud-8lmyovqdb-hack-club-bot.vercel.app/0chess_demo.mp4"
                     controls
                 />
             </div>
