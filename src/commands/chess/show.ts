@@ -1,6 +1,5 @@
 import {
     ChatInputCommandInteraction,
-    MessageFlags,
     SlashCommandBuilder,
 } from "discord.js";
 import { showGame } from "../../functions/game";
@@ -10,9 +9,6 @@ export const command = {
         .setName("status")
         .setDescription("Shows the current chess game"),
     async execute(interaction: ChatInputCommandInteraction) {
-        await interaction.deferReply({
-            flags: MessageFlags.Ephemeral,
-        });
         await showGame(interaction.user.id, interaction);
     },
 };

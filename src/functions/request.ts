@@ -23,7 +23,11 @@ export async function request(
         player1 = await User.create({
             userId: p1.id,
             name: p1.username,
-            avatar: p1.avatar,
+            avatar: p1.displayAvatarURL({
+                extension: "png",
+                forceStatic: true,
+                size: 256,
+            }),
         });
     }
     const player2 = await User.findOne({ userId: p2.id });
@@ -38,7 +42,7 @@ export async function request(
         return;
     }
     if (player2.currentGame) {
-        await interaction.editReply("Player 2 is already in a game.");
+        await interaction.editReply(`<@${p2.id}> is already in a game.`);
         return;
     }
     const req1 = await MatchRequest.findOne({

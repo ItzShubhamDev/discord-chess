@@ -10,7 +10,7 @@ import {
 } from "discord.js";
 import { User } from "../schemas/User";
 import { Game } from "../schemas/Game";
-import { Chess, Move, PieceSymbol } from "chess.js";
+import { Chess, Color, Move, PieceSymbol, Square } from "chess.js";
 import { drawBoard } from "./board";
 import { aiMove, checkAI } from "./ai";
 
@@ -44,19 +44,57 @@ const emojis = {
     wr: "<:whiterook:1333285946602291274>",
 } as Record<string, string>;
 
+export async function getChannel(
+    interaction: ChatInputCommandInteraction | ButtonInteraction,
+    channelId?: string
+) {
+    const channel = (await interaction.client.channels.fetch(
+        channelId || interaction.channelId
+    )) as TextChannel;
+
+    if (!channel) {
+        await interaction.editReply({
+            content: "Could not find channel!",
+        });
+        return;
+    }
+    if (!channel.isTextBased()) {
+        await interaction.editReply({
+            content: "Channel is not a text channel!",
+        });
+        return;
+    }
+    if (!channel.isSendable()) {
+        await interaction.editReply({
+            content: "Cannot send messages in this channel!",
+        });
+        return;
+    }
+
+    return channel;
+}
+
 export async function play(p1: string, p2: string, channel: TextChannel) {
     const isAi = checkAI(p2);
     const player1 = await User.findOne({ userId: p1 });
     let player2 = await User.findOne({ userId: p2 });
     if (isAi) {
-        player2 = await User.create({
-            userId: p2,
-        });
-        await Game.create({
+        if (!player2) {
+            player2 = await User.create({
+                userId: p2,
+            });
+        }
+        if (!player1) {
+            await channel.send("Player not found.");
+            return;
+        }
+        const game = await Game.create({
             player1: p1,
             player2: p2,
             status: "active",
         });
+        player1.currentGame = game.id;
+        await player1.save();
     }
     if (!player1 || !player2) {
         await channel.send("Players not found.");
@@ -79,28 +117,18 @@ export async function play(p1: string, p2: string, channel: TextChannel) {
     }
 
     const chess = new Chess();
-    const image = await drawBoard(chess.board());
+    const board = chess.board();
 
     game.fen = chess.fen();
 
-    const button = new ButtonBuilder()
-        .setCustomId("moves")
-        .setLabel("Moves")
-        .setStyle(ButtonStyle.Primary);
-
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
-
-    const attachment = new AttachmentBuilder(image, {
-        name: "board.png",
-    });
-
-    const message = await channel.send({
-        files: [attachment],
-        components: [row],
-    });
+    const message = await sendChessBoard(board, channel, game.message);
+    if (!message) {
+        game.channel = channel.id;
+        await game.save();
+        return;
+    }
     game.message = message.id;
     game.channel = channel.id;
-
     await game.save();
 }
 
@@ -159,8 +187,8 @@ export async function legalMoves(
             text = `<@${winner}> has won.`;
         }
         await interaction.editReply("Game ended.");
-        const image = await drawBoard(chess.board());
-        await sendChessBoard(image, channel, game.message, text);
+        const board = chess.board();
+        await sendChessBoard(board, channel, game.message, text);
         await game.save();
         return;
     }
@@ -315,14 +343,8 @@ export async function move(
         interaction.editReply("Game not found.");
         return;
     }
-    const channel = (await interaction.client.channels.fetch(
-        game.channel
-    )) as TextChannel;
-
-    if (!channel || !channel.isTextBased()) {
-        interaction.editReply("Channel not found.");
-        return;
-    }
+    const channel = await getChannel(interaction, game.channel);
+    if (!channel) return;
 
     const chess = new Chess(game.fen);
 
@@ -357,8 +379,8 @@ export async function move(
             text = `<@${winner}> has won.`;
         }
         await interaction.editReply("Game ended.");
-        const image = await drawBoard(chess.board());
-        await sendChessBoard(image, channel, game.message, text);
+        const board = chess.board();
+        await sendChessBoard(board, channel, game.message, text);
         await game.save();
         return;
     }
@@ -369,20 +391,26 @@ export async function move(
     }
 
     chess.move(move);
-    const image = await drawBoard(chess.board());
-
-    await sendChessBoard(image, channel, game.message);
+    const board = chess.board();
+    await sendChessBoard(board, channel, game.message);
 
     game.fen = chess.fen();
     await game.save();
 }
 
 export async function sendChessBoard(
-    image: Buffer<ArrayBufferLike>,
+    board: ({
+        square: Square;
+        type: PieceSymbol;
+        color: Color;
+    } | null)[][],
     channel: TextChannel,
     messageId?: string | null,
-    content?: string
+    content?: string,
+    status?: boolean,
+    interaction?: ChatInputCommandInteraction | ButtonInteraction
 ) {
+    const image = await drawBoard(board);
     const attachment = new AttachmentBuilder(image, {
         name: "board.png",
     });
@@ -391,21 +419,44 @@ export async function sendChessBoard(
         .setCustomId("moves")
         .setLabel("Moves")
         .setStyle(ButtonStyle.Primary);
+    const drawButton = new ButtonBuilder()
+        .setCustomId("draw")
+        .setLabel("Draw")
+        .setStyle(ButtonStyle.Secondary);
+    const resignButton = new ButtonBuilder()
+        .setCustomId("resign")
+        .setLabel("Resign")
+        .setStyle(ButtonStyle.Danger);
 
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents([
+        button,
+        drawButton,
+        resignButton,
+    ]);
 
-    const message = await channel.messages.fetch(messageId || "");
-    if (message) {
-        return await message.edit({
+    if (status && interaction) {
+        await interaction.editReply({
+            content,
+            files: [attachment],
+        });
+        return;
+    }
+
+    if (messageId) {
+        const message = await channel.messages.fetch(messageId);
+        await message.edit({
             content,
             files: [attachment],
             components: [row],
         });
+        return;
     }
-    await channel.send({
+    const r = await channel.send({
         content,
         files: [attachment],
+        components: [row],
     });
+    return r;
 }
 
 export async function showGame(
@@ -416,31 +467,36 @@ export async function showGame(
         $or: [{ player1: player }, { player2: player }],
         status: "active",
     });
-    if (!game || !game.fen) {
+    if (!game || !game.fen || !game.channel) {
         await interaction.editReply("Game not found.");
         return;
     }
     const chess = new Chess(game.fen);
-    const image = await drawBoard(chess.board());
+    const board = chess.board();
 
-    const attachment = new AttachmentBuilder(image, {
-        name: "board.png",
-    });
+    const channel = await getChannel(interaction, game.channel);
+    if (!channel) return;
 
-    await interaction.editReply({
-        files: [attachment],
-    });
+    await sendChessBoard(
+        board,
+        channel,
+        game.message,
+        undefined,
+        true,
+        interaction
+    );
 }
 
 export async function drawGame(
     player: string,
-    channel: TextChannel,
-    interaction: ChatInputCommandInteraction
+    interaction: ChatInputCommandInteraction | ButtonInteraction
 ) {
     const game = await Game.findOne({
         $or: [{ player1: player }, { player2: player }],
         status: "active",
     });
+    const channel = await getChannel(interaction);
+    if (!channel) return;
     if (!game) {
         await channel.send("Game not found.");
         return;
@@ -466,7 +522,9 @@ export async function drawGame(
             }
         );
         await channel.send("Game ended in a draw.");
-        await interaction.editReply("Game ended in a draw.");
+        if (interaction.replied) {
+            await interaction.deleteReply();
+        }
         return;
     }
 
@@ -529,7 +587,7 @@ export async function drawGame(
 
 export async function resign(
     player: string,
-    interaction: ChatInputCommandInteraction
+    interaction: ChatInputCommandInteraction | ButtonInteraction
 ) {
     const game = await Game.findOne({
         $or: [{ player1: player }, { player2: player }],
@@ -544,14 +602,8 @@ export async function resign(
         return;
     }
 
-    const channel = (await interaction.client.channels.fetch(
-        game.channel
-    )) as TextChannel;
-
-    if (!channel || !channel.isTextBased()) {
-        await interaction.editReply("Channel not found.");
-        return;
-    }
+    const channel = await getChannel(interaction, game.channel);
+    if (!channel) return;
 
     const opponent = game.player1 === player ? game.player2 : game.player1;
 

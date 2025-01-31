@@ -2,7 +2,6 @@ import {
     ChatInputCommandInteraction,
     Colors,
     EmbedBuilder,
-    MessageFlags,
     SlashCommandBuilder,
     time,
 } from "discord.js";
@@ -15,9 +14,6 @@ export const command = {
         .setDescription("Shows your history of chess games"),
 
     async execute(interaction: ChatInputCommandInteraction) {
-        await interaction.deferReply({
-            flags: MessageFlags.Ephemeral,
-        });
         const history = await getHistory(interaction.user.id);
         if (!history) {
             return await interaction.editReply({
