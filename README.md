@@ -26,6 +26,7 @@ These are the environment variables needed for self hosting .env file
 Node.JS `20` or later
 MongoDB Server
 A Discord Bot (create from [Discord.dev](https://discord.com/developers/applications))
+Github Models
 
 Clone the project
 
